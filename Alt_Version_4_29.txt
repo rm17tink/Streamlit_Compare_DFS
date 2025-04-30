@@ -9,6 +9,7 @@ st.set_page_config(layout="wide")
 from io import StringIO
 from io import BytesIO
 from snowflake.snowpark.context import get_active_session
+ALL_SOURCE_TYPES = ["CSV", "XLSX", "SQL"]
 session = get_active_session()
 # Fetch User's EUA ID
 
@@ -32,10 +33,10 @@ query_example = f"""SELECT * FROM {current_db}.CMS_BDM_VIEW_OPI_AAL.lov_clm_pos_
 
 
 # Function to clear session state
-def clear_session_state(prefix):
-    keys_to_clear = [key for key in st.session_state.keys() if key.startswith(prefix)]
-    for key in keys_to_clear:
-        del st.session_state[key]
+
+def clear_session_state(df_key):
+    if df_key in st.session_state:
+        del st.session_state[df_key]
     st.write("Session state cleared")
 
 
@@ -252,27 +253,33 @@ def main():
     if 'df2' not in st.session_state:
         st.session_state.df2 = pd.DataFrame()
         
-    st.markdown("<h1 style='color: red; text-align: center;'>Upload and Compare Data Sources Part Deux</h1>", unsafe_allow_html=True)
+        
+    st.markdown("<h1 style='color: black; text-align: center;'>Upload and Compare Data Sources Part Deux</h1>", unsafe_allow_html=True)
     
     # Layout for side-by-side display
     col1, col2 = st.columns(2)
     
-
+    if 'data_source_df1' not in st.session_state:
+        st.session_state.data_source_df1 = ALL_SOURCE_TYPES[0] 
+    if 'data_source_df2' not in st.session_state:
+        st.session_state.data_source_df2 = ALL_SOURCE_TYPES[0] 
     ###########################################################################################################  
     # DF1 Choices
     ###########################################################################################################    
     with col1:
-        st.subheader("DF1 File Type:")
-        data_source_df1 = st.selectbox("", ["CSV", "XLSX", "SQL"], key="data_source_df1")
+        data_source_df1 = st.selectbox(label="**Select Source 1**:"
+                                       ,options=ALL_SOURCE_TYPES
+                                       ,key='data_source_df1')
+        st.write(f"Selected Source 1: **{st.session_state.data_source_df1}**")
         
-        # Force a rerun when the data source for df1 is changed
-        if 'last_data_source_df1' not in st.session_state:
-            st.session_state.last_data_source_df1 = data_source_df1
+        # # Force a rerun when the data source for df1 is changed
+        # if 'last_data_source_df1' not in st.session_state:
+        #     st.session_state.last_data_source_df1 = data_source_df1
         
-        if st.session_state.last_data_source_df1 != data_source_df1:
-            clear_session_state('df1')
-            st.session_state.last_data_source_df1 = data_source_df1
-            st.rerun()
+        # if st.session_state.last_data_source_df1 != data_source_df1:
+        #     clear_session_state('df1')
+        #     st.session_state.last_data_source_df1 = data_source_df1
+        #     st.rerun()
 
         header_placeholder_df1 = st.empty()
         uploader_placeholder_df1 = st.empty()
@@ -320,15 +327,19 @@ def main():
     # DF2 Choices
     ###########################################################################################################    
     with col2:
-        st.subheader("DF2 File Type:")
-        data_source_df2 = st.selectbox("", ["CSV", "XLSX", "SQL"], key="data_source_df2")
-        if 'last_data_source_df2' not in st.session_state:
-            st.session_state.last_data_source_df2 = data_source_df2
+        data_source_df2 = st.selectbox(label="**Select Source 2**:", options=ALL_SOURCE_TYPES, 
+            key='data_source_df2' )
+
+        st.write(f"Selected Source 2: **{st.session_state.data_source_df2}**")
+
         
-        if st.session_state.last_data_source_df2 != data_source_df2:
-            clear_session_state('df2')
-            st.session_state.last_data_source_df2 = data_source_df2
-            st.rerun()
+        # if 'last_data_source_df2' not in st.session_state:
+        #     st.session_state.last_data_source_df2 = data_source_df2
+        
+        # if st.session_state.last_data_source_df2 != data_source_df2:
+        #     clear_session_state('df2')
+        #     st.session_state.last_data_source_df2 = data_source_df2
+        #     st.rerun()
 
         header_placeholder_df2 = st.empty()
         uploader_placeholder_df2 = st.empty()
