@@ -18,6 +18,18 @@ session = get_active_session()
 ###########################################################
 
 
+###########################################################
+# Functions 
+###########################################################
+from snowflake.snowpark.context import get_active_session
+import streamlit as st
+import pandas as pd
+import numpy as np
+import xlsxwriter
+import io
+from io import StringIO
+from io import BytesIO
+
 def get_current_db(session):
     try:
         current_account = session.sql("SELECT CURRENT_ACCOUNT()").collect()[0][0]  # Fetch account name 
@@ -25,11 +37,6 @@ def get_current_db(session):
     except Exception as e:
         st.error(f"Error determining database: {e}")
         return None
-
-current_db = get_current_db(session)  
-run_by_user = session.sql("select current_user()").collect()[0][0]  
-query_example = f"""SELECT * FROM {current_db}.CMS_BDM_VIEW_OPI_AAL.lov_clm_pos_cd"""
-
 
 
 # Function to clear session state
@@ -48,16 +55,17 @@ def load_csv(file):
 
 # Function to run SQL queries and store results in session state
 @st.cache_data
-def run_sql_queries(query1, query2):
+
+def run_sql_queries(query1, query2,session):
     if query1 and query2:
-        st.session_state.df1 = session.sql(query1).to_pandas()
-        st.session_state.df2 = session.sql(query2).to_pandas()
-        st.write("First SQL DataFrame:")
-        st.dataframe(st.session_state.df1.head(5))
-        st.write("Second SQL DataFrame:")
-        st.dataframe(st.session_state.df2.head(5))
+        df1 = session.sql(query1).to_pandas()
+        df2 = session.sql(query2).to_pandas()
+        return df1, df2
     else:
         st.warning("Please enter both SQL queries to proceed.")
+        return None, None
+    
+
 
 #Load Excel Files
 @st.cache_data
@@ -87,47 +95,62 @@ def create_xlsx(df1, df2):
 
 
 # build comparison DataFrames
-def identify_criteria(df1, df2):  
+def identify_criteria(df1, df2):
+    
     criteria_met = True
+    dtype_mismatch = {}
+
     # Standardize column names to uppercase
     df1.columns = [col.upper() for col in df1.columns]
     df2.columns = [col.upper() for col in df2.columns]
-    #Length
-    if len(df1) != len(df2):
-        st.warning(f"Row Error: False")
-        st.write(f"Number of rows in df1: {len(df1):,}")
-        st.write(f"Number of rows in df2: {len(df2):,}")
-        criteria_met = False
-    else:    
-        st.success(f"Rows match: {len(df1) == len(df2)}")
-        st.write(f"Number of rows in df1: {len(df1):,}")
-        st.write(f"Number of rows in df2: {len(df2):,}")
+    
+    try:
+        # Length
+        if len(df1) != len(df2):
+            st.warning(f"Row Error: False")
+            st.write(f"Number of rows in df1: {len(df1):,}")
+            st.write(f"Number of rows in df2: {len(df2):,}")
+            criteria_met = False
+        else:
+            st.success(f"Rows match: {len(df1) == len(df2)}")
+            st.write(f"Number of rows in df1: {len(df1):,}")
+            st.write(f"Number of rows in df2: {len(df2):,}")
         
-    # Columns
-    if list(df1.columns) != list(df2.columns):
-        st.warning("Column (#) Error (case insensitive).")
-        column_list = pd.DataFrame({'df1_columns': list(df1.columns), 'df2_columns': list(df2.columns)})
-        st.write(column_list)
-        criteria_met = False
-    else: 
-        st.success(f"Columns match: {list(df1.columns) == list(df2.columns)}")
-        st.write(f"Number of columns in df1: {len(df1.columns):,}")
-        st.write(f"Number of columns in df2: {len(df2.columns):,}")
-
-
-    # Dtypes
-    dtype_mismatch = {col: (df1[col].dtype, df2[col].dtype) for col in df1.columns if df1[col].dtype != df2[col].dtype}
-    if dtype_mismatch:
-        st.warning("Dtype match: False")
-        st.write(pd.DataFrame(dtype_mismatch, index=["df1_dtype", "df2_dtype"]).T)
-        criteria_met = False
+        # Columns
+        if list(df1.columns) != list(df2.columns):
+            st.warning("Column (#) Error (case insensitive).")
+            column_list = pd.DataFrame({'df1_columns': list(df1.columns), 'df2_columns': list(df2.columns)})
+            st.write(column_list)
+            criteria_met = False
+        else:
+            st.success(f"Columns match: {list(df1.columns) == list(df2.columns)}")
+            st.write(f"Number of columns in df1: {len(df1.columns):,}")
+            st.write(f"Number of columns in df2: {len(df2.columns):,}")
         
+        # Dtypes
+        for col in df1.columns:
+            if col in df2.columns:
+                if df1[col].dtype != df2[col].dtype:
+                    dtype_mismatch[col] = (df1[col].dtype, df2[col].dtype)
+            else:
+                st.warning(f"Column '{col}' not found in df2")
+                criteria_met = False
+        
+        if dtype_mismatch:
+            st.warning("Dtype match: False")
+            st.write(pd.DataFrame(dtype_mismatch, index=["df1_dtype", "df2_dtype"]).T)
+            criteria_met = False
+        else:
+            st.success("Dtype match: True")
+    except Exception as e:
+        st.warning(f"An error occurred: {e}")
+
+    
     return criteria_met, dtype_mismatch
 
 
+
 # Fix dfs before processing 
-
-
 def convert_dtypes(df1, df2, dtype_mismatch, convert_to_float=False, specific_columns=None):
     if convert_to_float:
         if specific_columns:
@@ -246,15 +269,8 @@ def test_compare_dataframes(df1, df2, drop_na=False, result_names=("df1", "df2")
 # Streamlit app
 ###############################################################################
 def main():
-    
-    # Check if DataFrames are in session state
-    if 'df1' not in st.session_state:
-        st.session_state.df1 = pd.DataFrame()
-    if 'df2' not in st.session_state:
-        st.session_state.df2 = pd.DataFrame()
-        
-        
-    st.markdown("<h1 style='color: black; text-align: center;'>Upload and Compare Data Sources Part Deux</h1>", unsafe_allow_html=True)
+     
+    st.markdown("<h1 style='color: white; text-align: center;'>Compare Data Sources</h1>", unsafe_allow_html=True)
     
     # Layout for side-by-side display
     col1, col2 = st.columns(2)
@@ -263,24 +279,22 @@ def main():
         st.session_state.data_source_df1 = ALL_SOURCE_TYPES[0] 
     if 'data_source_df2' not in st.session_state:
         st.session_state.data_source_df2 = ALL_SOURCE_TYPES[0] 
+        
+    # Check if DataFrames are in session state
+    if 'df1' not in st.session_state:
+        st.session_state.df1 = pd.DataFrame()
+    if 'df2' not in st.session_state:
+        st.session_state.df2 = pd.DataFrame()
+        
+
     ###########################################################################################################  
     # DF1 Choices
     ###########################################################################################################    
     with col1:
-        data_source_df1 = st.selectbox(label="**Select Source 1**:"
-                                       ,options=ALL_SOURCE_TYPES
+        data_source_df1 = st.selectbox(label="**Select Source 1**:",options=ALL_SOURCE_TYPES
                                        ,key='data_source_df1')
         st.write(f"Selected Source 1: **{st.session_state.data_source_df1}**")
         
-        # # Force a rerun when the data source for df1 is changed
-        # if 'last_data_source_df1' not in st.session_state:
-        #     st.session_state.last_data_source_df1 = data_source_df1
-        
-        # if st.session_state.last_data_source_df1 != data_source_df1:
-        #     clear_session_state('df1')
-        #     st.session_state.last_data_source_df1 = data_source_df1
-        #     st.rerun()
-
         header_placeholder_df1 = st.empty()
         uploader_placeholder_df1 = st.empty()
 
@@ -288,19 +302,18 @@ def main():
         # CSV input for df1
         ###########################################################################################################
         if data_source_df1 == "CSV":
-            header_placeholder_df1.header("Upload .CSV File for df1")
-            uploaded_file1 = uploader_placeholder_df1.file_uploader("Choose the CSV file for df1", type=["csv"],key="csv_file1")
+            header_placeholder_df1.header("Upload .CSV File for DF1")
+            uploaded_file1 = uploader_placeholder_df1.file_uploader("", type=["csv"],key="csv_file1")
             if uploaded_file1 is not None:
                 st.session_state.df1 = load_csv(uploaded_file1)
-                st.write("df1 DataFrame:")
                 st.dataframe(st.session_state.df1.head(5))
     
         ###########################################################################################################  
         # EXCEL input for df1
         ###########################################################################################################    
         elif data_source_df1 == "XLSX":
-            header_placeholder_df1.header("Upload .XLSX File for df1")
-            uploaded_file_1 = uploader_placeholder_df1.file_uploader("Upload Excel File (.xlsx) for df1", type="xlsx", key="xlsx_file1")
+            header_placeholder_df1.header("Upload .XLSX File for DF1")
+            uploaded_file_1 = uploader_placeholder_df1.file_uploader("", type="xlsx", key="xlsx_file1")
             if uploaded_file_1:
                 try:
                     xls1 = pd.ExcelFile(uploaded_file_1)
@@ -317,12 +330,18 @@ def main():
         # SQL input for df1
         ###########################################################################################################
         elif data_source_df1 == "SQL":
-            header_placeholder_df1.header("Enter SQL query for df1")
-            sql_query_1 = uploader_placeholder_df1.text_area("Enter the SQL query for df1", placeholder="SELECT * FROM table_name",key="sql_file1")
-            if st.button("Run SQL Query for df1"):
-                st.session_state.df1 = run_sql_query(sql_query_1)
-                st.dataframe(st.session_state.df1.head(5))
-    
+            header_placeholder_df1.header(f"**{st.session_state.data_source_df1}** query for DF1")
+            sql_query_1 = uploader_placeholder_df1.text_area("", placeholder="SELECT * FROM schema.database.table_name",key="sql_file1")
+            
+            try:
+                if st.button("Run SQL Query for DF1", key='Query1', icon="🚨"):
+                            st.session_state.df1 = session.sql(sql_query_1).to_pandas()
+                            st.session_state.df1_ran = True
+            except: 
+                st.warning("Please Add a Query")
+            if 'df1_ran' in st.session_state and st.session_state.df1_ran and not st.session_state.df1.empty:
+                        st.dataframe(st.session_state.df1.head(5))
+
     ###########################################################################################################  
     # DF2 Choices
     ###########################################################################################################    
@@ -332,15 +351,6 @@ def main():
 
         st.write(f"Selected Source 2: **{st.session_state.data_source_df2}**")
 
-        
-        # if 'last_data_source_df2' not in st.session_state:
-        #     st.session_state.last_data_source_df2 = data_source_df2
-        
-        # if st.session_state.last_data_source_df2 != data_source_df2:
-        #     clear_session_state('df2')
-        #     st.session_state.last_data_source_df2 = data_source_df2
-        #     st.rerun()
-
         header_placeholder_df2 = st.empty()
         uploader_placeholder_df2 = st.empty()
 
@@ -348,18 +358,17 @@ def main():
         # CSV input for df2
         ###########################################################################################################
         if data_source_df2 == "CSV":
-            header_placeholder_df2.header("Upload .CSV File for df2")
+            header_placeholder_df2.header("Upload .CSV File for DF2")
             uploaded_file2 = uploader_placeholder_df2.file_uploader("Choose the CSV file for df2", type=["csv"], key="csv_file2")
             if uploaded_file2 is not None:
                 st.session_state.df2 = load_csv(uploaded_file2)
-                st.write("df2 DataFrame:")
                 st.dataframe(st.session_state.df2.head(5))
     
         ###########################################################################################################  
         # EXCEL input for df2
         ###########################################################################################################    
         elif data_source_df2 == "XLSX":
-            header_placeholder_df2.header("Upload .XLSX File for df2")
+            header_placeholder_df2.header("Upload .XLSX File for DF2")
             uploaded_file_2 = uploader_placeholder_df2.file_uploader("Upload Excel File (.xlsx) for df2", type="xlsx", key="xlsx_file2")
             if uploaded_file_2:
                 try:
@@ -377,12 +386,19 @@ def main():
         # SQL input for df2
         ###########################################################################################################
         elif data_source_df2 == "SQL":
-            header_placeholder_df2.header("Enter SQL query for df2")
-            sql_query_2 = uploader_placeholder_df2.text_area("Enter the SQL query for df2", placeholder="SELECT * FROM table_name",key="sql_file2")
-            if st.button("Run SQL Query for df2"):
-                st.session_state.df2 = run_sql_query(sql_query_2)
-                st.dataframe(st.session_state.df2.head(5))
+            header_placeholder_df2.header(f"**{st.session_state.data_source_df2}** query for DF2")
+            sql_query_2 = uploader_placeholder_df2.text_area("", placeholder="SELECT * FROM schema.database.table_name",key="sql_file2")
+            
+            try:
+                if st.button("Run SQL Query for DF2", key='Query2', icon="🚨"):
+                    st.session_state.df2 = session.sql(sql_query_2).to_pandas()
+                    st.session_state.df2_ran = True
+            except:
+                st.warning("Please add a query")
 
+            if 'df2_ran' in st.session_state and st.session_state.df2_ran and not st.session_state.df2.empty:
+                st.dataframe(st.session_state.df2.head(5))
+    
 ###########################################################################################################  
                         # Full Processing
 ###########################################################################################################    
@@ -420,8 +436,9 @@ def main():
             decimal_places = st.number_input("Choose number of decimal places", min_value=0, max_value=10, value=2)
             
             if st.button("Sort and Round Data"):
-                st.session_state.df1_processed, st.session_state.df2_processed = round_and_sort(
-                    st.session_state.df1_processed, st.session_state.df2_processed, sort_columns=sort_columns, decimal_places=decimal_places)
+                st.session_state.df1_processed1, st.session_state.df2_processed1 = round_and_sort(
+                    st.session_state.df1_processed, st.session_state.df2_processed
+                        , sort_columns=sort_columns, decimal_places=decimal_places)
                 st.session_state.sort_and_round_done = True
                 st.success("Data sorted and rounded successfully! You can now compare the DataFrames.")
         
@@ -429,7 +446,7 @@ def main():
             if st.session_state and 'sort_and_round_done' in st.session_state and st.session_state.sort_and_round_done:
                 st.header("Compare Data")
                 if st.button("Compare DataFrames"):
-                    comparison = test_compare_dataframes(st.session_state.df1_processed, st.session_state.df2_processed)
+                    comparison = test_compare_dataframes(st.session_state.df1_processed1, st.session_state.df2_processed1)
                     if comparison is not None:
                         try:
                             if not comparison.empty:
@@ -453,5 +470,20 @@ def main():
                         except AttributeError as e:
                             st.error("Comparison result is None and has no attribute 'empty'.")
 
+    if 'last_data_source_df1' not in st.session_state:
+        st.session_state.last_data_source_df1 = data_source_df1
+    if 'last_data_source_df2' not in st.session_state:
+        st.session_state.last_data_source_df2 = data_source_df2
+    
+    if st.session_state.last_data_source_df1 != data_source_df1:
+        clear_session_state('df1')
+        st.session_state.last_data_source_df1 = data_source_df1
+        st.rerun()
+    
+    if st.session_state.last_data_source_df2 != data_source_df2:
+        clear_session_state('df2')
+        st.session_state.last_data_source_df2 = data_source_df2
+        st.rerun()
+        
 if __name__ == "__main__":
     main()
